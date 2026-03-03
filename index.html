@@ -3,57 +3,385 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI起立リハビリサポート</title>
-    
-    <!-- Tailwind CSS -->
+    <title>介護見守りアプリ (転倒検知プロトタイプ)</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- MediaPipe Pose -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
-
     <style>
-        body { font-family: 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif; background-color: #f3f4f6; }
-        .canvas-container { position: relative; width: 100%; max-width: 800px; margin: 0 auto; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); background-color: #000; aspect-ratio: 4/3; }
-        .input_video { display: none; }
-        .output_canvas { width: 100%; height: 100%; object-fit: cover; }
-        #loading_screen { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background-color: rgba(0, 0, 0, 0.7); color: white; z-index: 10; }
-        .spinner { border: 4px solid rgba(255, 255, 255, 0.3); border-radius: 50%; border-top: 4px solid #fff; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 16px; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            aspect-ratio: 4/3;
+            background-color: #1f2937; /* gray-800 */
+            border-radius: 0.75rem;
+            overflow: hidden;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+        /* カメラ映像と描画キャンバスを重ねる */
+        #webcam, #output_canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            /* 鏡のように反転表示させる */
+            transform: scaleX(-1); 
+        }
+        #output_canvas {
+            z-index: 10;
+        }
+        /* 転倒検知時の赤い点滅エフェクト */
+        .alert-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            border: 8px solid transparent;
+            z-index: 20;
+            pointer-events: none;
+            transition: border-color 0.2s;
+        }
+        .is-alert .alert-overlay {
+            border-color: #ef4444; /* red-500 */
+            animation: pulse-border 1s infinite alternate;
+        }
+        @keyframes pulse-border {
+            0% { border-color: rgba(239, 68, 68, 0.5); }
+            100% { border-color: rgba(239, 68, 68, 1); }
+        }
+        /* ログエリアのスクロール */
+        #log-container {
+            max-height: 200px;
+            overflow-y: auto;
+        }
     </style>
 </head>
-<body class="min-h-screen p-4 md:p-8">
+<body class="bg-gray-50 min-h-screen text-gray-800 font-sans">
 
-    <div class="max-w-5xl mx-auto">
-        <!-- Header -->
-        <header class="text-center mb-8">
-            <h1 class="text-3xl md:text-4xl font-bold text-teal-700 mb-2">AI 起立リハビリサポート</h1>
-            <p class="text-gray-600 text-sm md:text-base">カメラの前で椅子からの立ち上がり動作を行うと、AIが自動で回数をカウントします。</p>
+    <div class="max-w-4xl mx-auto p-4 md:p-6 lg:p-8">
+        <!-- ヘッダー -->
+        <header class="mb-6 border-b pb-4">
+            <h1 class="text-2xl md:text-3xl font-bold text-blue-700 flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+                AI見守りカメラ (姿勢推定)
+            </h1>
+            <p class="text-gray-600 mt-2 text-sm md:text-base">
+                MediaPipeを利用して骨格をリアルタイムに検知します。顔（鼻）の位置が画面の下部に下がると「転倒・うずくまり」と判定して警告を出します。
+            </p>
         </header>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            
-            <!-- Camera & Canvas Area -->
-            <div class="lg:col-span-2">
-                <div class="canvas-container" id="container">
-                    <video class="input_video"></video>
-                    <canvas class="output_canvas" width="800" height="600"></canvas>
+            <!-- メインカメラエリア (左側/上部) -->
+            <div class="lg:col-span-2 flex flex-col items-center">
+                <div id="video-wrapper" class="video-container relative">
+                    <video id="webcam" autoplay playsinline></video>
+                    <canvas id="output_canvas"></canvas>
+                    <div class="alert-overlay"></div>
                     
-                    <div id="loading_screen" class="hidden">
-                        <div class="spinner"></div>
-                        <p class="text-lg font-bold">AIモデルを読み込み中...</p>
-                        <p class="text-sm mt-2 text-gray-300">カメラへのアクセスを許可してください</p>
+                    <!-- ロード中のオーバーレイ -->
+                    <div id="loading" class="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 bg-opacity-80 z-30 text-white">
+                        <svg class="animate-spin h-10 w-10 mb-4 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <p class="font-semibold tracking-wide">AIモデルを読み込み中...</p>
                     </div>
+                </div>
 
-                    <!-- Overlay UI -->
-                    <div class="absolute top-4 left-4 bg-white/90 px-4 py-2 rounded-lg shadow-lg">
-                        <span class="text-gray-600 text-sm font-bold block">現在の姿勢</span>
-                        <span id="posture_status" class="text-2xl font-black text-orange-500">準備中</span>
+                <div class="mt-6 flex gap-4 w-full max-w-[640px]">
+                    <button id="webcamButton" disabled class="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold py-3 px-4 rounded-lg shadow transition duration-200 flex justify-center items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" />
+                        </svg>
+                        <span id="btnText">カメラを起動する</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- ステータス・ログエリア (右側/下部) -->
+            <div class="flex flex-col gap-4">
+                <!-- ステータスカード -->
+                <div class="bg-white p-5 rounded-xl shadow border border-gray-100">
+                    <h2 class="text-sm font-bold text-gray-500 uppercase tracking-wider mb-2">現在の状態</h2>
+                    <div id="status-indicator" class="flex items-center gap-3">
+                        <span class="relative flex h-4 w-4">
+                            <span id="status-ping" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-gray-400 opacity-75"></span>
+                            <span id="status-dot" class="relative inline-flex rounded-full h-4 w-4 bg-gray-500"></span>
+                        </span>
+                        <span id="status-text" class="font-bold text-xl text-gray-700">待機中</span>
+                    </div>
+                </div>
+
+                <!-- 検知ログカード -->
+                <div class="bg-white rounded-xl shadow border border-gray-100 flex-1 flex flex-col overflow-hidden">
+                    <div class="bg-gray-50 px-4 py-3 border-b border-gray-100">
+                        <h2 class="text-sm font-bold text-gray-700">検知履歴</h2>
+                    </div>
+                    <div class="p-4 flex-1">
+                        <ul id="log-container" class="space-y-2 text-sm">
+                            <li class="text-gray-400 italic">記録はありません</li>
+                        </ul>
                     </div>
                 </div>
                 
-                <div class="mt-4 flex justify-center gap-4">
-                    <button id="start_btn" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-8 rounded-full shadow-lg transition-transform transform hover:scale-105 flex items-center gap-2">
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1
+                <!-- 注意書き -->
+                <div class="bg-blue-50 text-blue-800 p-4 rounded-xl text-xs leading-relaxed">
+                    <p><strong>テスト方法:</strong> カメラの前に立ち、ゆっくりとしゃがみ込むか、頭を画面の下端に近づけてみてください。「転倒」として検知されます。</p>
+                    <p class="mt-2 text-gray-500">※映像はすべてご自身の端末内で処理され、外部に送信されることはありません。</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MediaPipeの読み込みとロジック (ES Module形式) -->
+    <script type="module">
+        import {
+            PoseLandmarker,
+            FilesetResolver,
+            DrawingUtils
+        } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
+
+        const video = document.getElementById("webcam");
+        const canvasElement = document.getElementById("output_canvas");
+        const canvasCtx = canvasElement.getContext("2d");
+        const enableWebcamButton = document.getElementById("webcamButton");
+        const btnText = document.getElementById("btnText");
+        const loadingScreen = document.getElementById("loading");
+        const videoWrapper = document.getElementById("video-wrapper");
+        
+        // ステータスUI要素
+        const statusText = document.getElementById("status-text");
+        const statusDot = document.getElementById("status-dot");
+        const statusPing = document.getElementById("status-ping");
+        const logContainer = document.getElementById("log-container");
+
+        let poseLandmarker = undefined;
+        let runningMode = "VIDEO";
+        let webcamRunning = false;
+        let lastVideoTime = -1;
+        
+        // 転倒検知の閾値と制御用変数
+        const FALL_THRESHOLD_Y = 0.75; // 画面上部を0.0、下部を1.0としたとき、0.75より下に鼻が来たら警告
+        let isFalling = false;
+        let lastLogTime = 0;
+
+        // --- 1. AIモデルの初期化 ---
+        const createPoseLandmarker = async () => {
+            try {
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+                );
+                poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task`,
+                        delegate: "GPU" // GPUを使用して高速化
+                    },
+                    runningMode: runningMode,
+                    numPoses: 1
+                });
+                
+                // ロード完了でUIを更新
+                loadingScreen.style.display = "none";
+                enableWebcamButton.disabled = false;
+                
+            } catch (error) {
+                console.error("モデルの読み込みに失敗しました:", error);
+                loadingScreen.innerHTML = `<p class="text-red-400 font-bold">エラー: モデルの読み込みに失敗しました</p>`;
+            }
+        };
+        createPoseLandmarker();
+
+        // --- 2. カメラの制御 ---
+        const hasGetUserMedia = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+
+        if (hasGetUserMedia()) {
+            enableWebcamButton.addEventListener("click", enableCam);
+        } else {
+            console.warn("getUserMedia() がサポートされていません。");
+            btnText.innerText = "カメラがサポートされていません";
+        }
+
+        function enableCam(event) {
+            if (!poseLandmarker) {
+                console.log("まだモデルが読み込まれていません！");
+                return;
+            }
+
+            if (webcamRunning === true) {
+                // カメラ停止処理
+                webcamRunning = false;
+                btnText.innerText = "カメラを起動する";
+                enableWebcamButton.classList.replace("bg-red-600", "bg-blue-600");
+                enableWebcamButton.classList.replace("hover:bg-red-700", "hover:bg-blue-700");
+                
+                const stream = video.srcObject;
+                const tracks = stream.getTracks();
+                tracks.forEach(track => track.stop());
+                video.srcObject = null;
+                
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                updateStatus("待機中", "gray");
+                videoWrapper.classList.remove("is-alert");
+            } else {
+                // カメラ起動処理
+                webcamRunning = true;
+                btnText.innerText = "カメラを停止する";
+                enableWebcamButton.classList.replace("bg-blue-600", "bg-red-600");
+                enableWebcamButton.classList.replace("hover:bg-blue-700", "hover:bg-red-700");
+                updateStatus("監視中 (正常)", "green");
+
+                const constraints = { video: { facingMode: "user" } };
+
+                navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+                    video.srcObject = stream;
+                    video.addEventListener("loadeddata", predictWebcam);
+                }).catch((err) => {
+                    console.error("カメラへのアクセスが拒否されたか、エラーが発生しました:", err);
+                    alert("カメラの起動に失敗しました。ブラウザの権限設定を確認してください。");
+                    webcamRunning = false;
+                    btnText.innerText = "カメラを起動する";
+                });
+            }
+        }
+
+        // --- 3. リアルタイム推論と描画 ---
+        async function predictWebcam() {
+            // キャンバスサイズをビデオに合わせる
+            canvasElement.style.width = video.videoWidth;
+            canvasElement.style.height = video.videoHeight;
+            canvasElement.width = video.videoWidth;
+            canvasElement.height = video.videoHeight;
+
+            if (runningMode === "IMAGE") {
+                runningMode = "VIDEO";
+                await poseLandmarker.setOptions({ runningMode: "VIDEO" });
+            }
+
+            let startTimeMs = performance.now();
+            if (lastVideoTime !== video.currentTime) {
+                lastVideoTime = video.currentTime;
+                // 推論の実行
+                poseLandmarker.detectForVideo(video, startTimeMs, (result) => {
+                    canvasCtx.save();
+                    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                    
+                    const drawingUtils = new DrawingUtils(canvasCtx);
+                    
+                    let personDetected = false;
+
+                    for (const landmark of result.landmarks) {
+                        personDetected = true;
+                        
+                        // 骨格を描画 (鏡文字になっているため描画座標も反転させる必要があるが、CSSでcanvas全体を反転させているのでそのまま描画でOK)
+                        drawingUtils.drawLandmarks(landmark, {
+                            radius: (data) => DrawingUtils.lerp(data.from ? data.from.z : 0, -0.15, 0.1, 5, 1),
+                            color: isFalling ? "#ef4444" : "#10b981", // 異常時は赤、通常時は緑の点
+                            lineWidth: 2
+                        });
+                        drawingUtils.drawConnectors(landmark, PoseLandmarker.POSE_CONNECTIONS, {
+                            color: isFalling ? "rgba(239, 68, 68, 0.7)" : "rgba(255, 255, 255, 0.7)",
+                            lineWidth: 3
+                        });
+
+                        // --- 転倒判定ロジック ---
+                        // 0番のランドマーク（鼻）のY座標を取得
+                        const noseY = landmark[0].y;
+                        
+                        // 鼻の位置が閾値より下（数値が大きい）なら転倒とみなす
+                        if (noseY > FALL_THRESHOLD_Y) {
+                            if (!isFalling) {
+                                isFalling = true;
+                                triggerFallAlert();
+                            }
+                        } else {
+                            if (isFalling) {
+                                isFalling = false;
+                                recoverFromAlert();
+                            }
+                        }
+                    }
+                    
+                    // 誰も映っていないときのステータス更新
+                    if (!personDetected && !isFalling && webcamRunning) {
+                         updateStatus("対象者を探しています...", "yellow");
+                    } else if (personDetected && !isFalling && webcamRunning) {
+                         updateStatus("監視中 (正常)", "green");
+                    }
+
+                    canvasCtx.restore();
+                });
+            }
+
+            // ループ
+            if (webcamRunning === true) {
+                window.requestAnimationFrame(predictWebcam);
+            }
+        }
+
+        // --- 4. アラート・UI制御 ---
+        function triggerFallAlert() {
+            videoWrapper.classList.add("is-alert");
+            updateStatus("⚠️ 転倒・うずくまりを検知！", "red");
+            addLog("異常を検知しました (転倒の可能性)", "text-red-600 font-bold");
+        }
+
+        function recoverFromAlert() {
+            videoWrapper.classList.remove("is-alert");
+            updateStatus("監視中 (正常)", "green");
+            addLog("通常状態に復帰しました", "text-green-600");
+        }
+
+        function updateStatus(text, colorType) {
+            statusText.innerText = text;
+            
+            // 色のリセット
+            statusDot.className = "relative inline-flex rounded-full h-4 w-4";
+            statusPing.className = "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75";
+            statusText.className = "font-bold text-xl";
+
+            if (colorType === 'red') {
+                statusDot.classList.add("bg-red-500");
+                statusPing.classList.add("bg-red-400");
+                statusText.classList.add("text-red-600");
+            } else if (colorType === 'green') {
+                statusDot.classList.add("bg-green-500");
+                statusPing.classList.add("bg-green-400");
+                statusText.classList.add("text-green-600");
+            } else if (colorType === 'yellow') {
+                statusDot.classList.add("bg-yellow-500");
+                statusPing.classList.add("bg-yellow-400");
+                statusText.classList.add("text-yellow-600");
+            } else {
+                statusDot.classList.add("bg-gray-500");
+                statusPing.classList.add("bg-gray-400");
+                statusPing.classList.remove("animate-ping"); // 待機中はアニメーションオフ
+                statusText.classList.add("text-gray-700");
+            }
+        }
+
+        function addLog(message, colorClass = "text-gray-700") {
+            // スパム防止 (同じような時間帯に連続でログを出さない 3秒間隔)
+            const now = Date.now();
+            if (now - lastLogTime < 3000 && message.includes("検知")) return;
+            if (message.includes("検知")) lastLogTime = now;
+
+            const nowStr = new Date().toLocaleTimeString('ja-JP');
+            const li = document.createElement("li");
+            li.className = `flex gap-2 border-b border-gray-50 pb-2 ${colorClass}`;
+            li.innerHTML = `<span class="text-gray-400 text-xs w-16 pt-0.5">${nowStr}</span> <span>${message}</span>`;
+            
+            // 最初の「記録はありません」を消す
+            if (logContainer.children[0] && logContainer.children[0].innerText.includes("記録はありません")) {
+                logContainer.innerHTML = '';
+            }
+            
+            logContainer.prepend(li); // 先頭に追加
+            
+            // ログが増えすぎたら古いものを消す
+            if (logContainer.children.length > 30) {
+                logContainer.removeChild(logContainer.lastChild);
+            }
+        }
+    </script>
+</body>
+</html>
