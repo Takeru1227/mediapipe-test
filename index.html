@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI起立リハビリサポート</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- MediaPipe Pose -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { font-family: 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif; background-color: #f3f4f6; }
+        .canvas-container { position: relative; width: 100%; max-width: 800px; margin: 0 auto; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); background-color: #000; aspect-ratio: 4/3; }
+        .input_video { display: none; }
+        .output_canvas { width: 100%; height: 100%; object-fit: cover; }
+        #loading_screen { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background-color: rgba(0, 0, 0, 0.7); color: white; z-index: 10; }
+        .spinner { border: 4px solid rgba(255, 255, 255, 0.3); border-radius: 50%; border-top: 4px solid #fff; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 16px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8">
+
+    <div class="max-w-5xl mx-auto">
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-teal-700 mb-2">AI 起立リハビリサポート</h1>
+            <p class="text-gray-600 text-sm md:text-base">カメラの前で椅子からの立ち上がり動作を行うと、AIが自動で回数をカウントします。</p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <!-- Camera & Canvas Area -->
+            <div class="lg:col-span-2">
+                <div class="canvas-container" id="container">
+                    <video class="input_video"></video>
+                    <canvas class="output_canvas" width="800" height="600"></canvas>
+                    
+                    <div id="loading_screen" class="hidden">
+                        <div class="spinner"></div>
+                        <p class="text-lg font-bold">AIモデルを読み込み中...</p>
+                        <p class="text-sm mt-2 text-gray-300">カメラへのアクセスを許可してください</p>
+                    </div>
+
+                    <!-- Overlay UI -->
+                    <div class="absolute top-4 left-4 bg-white/90 px-4 py-2 rounded-lg shadow-lg">
+                        <span class="text-gray-600 text-sm font-bold block">現在の姿勢</span>
+                        <span id="posture_status" class="text-2xl font-black text-orange-500">準備中</span>
+                    </div>
+                </div>
+                
+                <div class="mt-4 flex justify-center gap-4">
+                    <button id="start_btn" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-8 rounded-full shadow-lg transition-transform transform hover:scale-105 flex items-center gap-2">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1
